@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JournalX</string>
+    <string name="accessibility_service_description">
+        JournalX uses accessibility service to detect when you open payment apps like Google Pay or PhonePe. 
+        This allows us to send you a notification to quickly log your expenses. 
+        
+        We do not collect, store, or transmit any personal information. 
+        This service is optional and can be disabled at any time from Settings.
+    </string>
+</resources>
