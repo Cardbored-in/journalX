@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
 import '../../data/models/note.dart';
+import '../../data/models/entry.dart';
+import '../../data/models/entry_type.dart';
 import '../../data/database/database_helper.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -13,7 +15,7 @@ class ShayariNotesScreen extends StatefulWidget {
 }
 
 class _ShayariNotesScreenState extends State<ShayariNotesScreen> {
-  List<Note> _notes = [];
+  List<Entry> _entries = [];
   bool _isLoading = true;
 
   @override
@@ -25,9 +27,20 @@ class _ShayariNotesScreenState extends State<ShayariNotesScreen> {
   Future<void> _loadNotes() async {
     setState(() => _isLoading = true);
     try {
-      final notesData = await DatabaseHelper.instance.queryAll('notes');
+      // Load from unified entries table
+      final entriesData = await DatabaseHelper.instance.getAllEntries();
+      // Filter for journal type
+      final journalEntries = entriesData
+          .where((e) =>
+              e.type == EntryType.journal ||
+              e.type == EntryType.midnightThought ||
+              e.type == EntryType.spark ||
+              e.type == EntryType.media ||
+              e.type == EntryType.dream)
+          .toList();
+
       setState(() {
-        _notes = notesData.map((map) => Note.fromMap(map)).toList();
+        _entries = journalEntries;
         _isLoading = false;
       });
     } catch (e) {
@@ -42,7 +55,6 @@ class _ShayariNotesScreenState extends State<ShayariNotesScreen> {
 
   Future<void> _addNote() async {
     final contentController = TextEditingController();
-    String? selectedMood;
 
     final result = await showModalBottomSheet<bool>(
       context: context,
@@ -51,81 +63,57 @@ class _ShayariNotesScreenState extends State<ShayariNotesScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) => Padding(
-          padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text(
-                'How are you feeling?',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              DateFormat('EEEE, MMMM d').format(DateTime.now()),
+              style: TextStyle(
+                fontSize: 14,
+                color: AppTheme.onSurfaceColor.withOpacity(0.6),
               ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: MoodOptions.moods.map((mood) {
-                  final isSelected = selectedMood == mood;
-                  return ChoiceChip(
-                    label: Text(mood),
-                    selected: isSelected,
-                    onSelected: (selected) {
-                      setModalState(() {
-                        selectedMood = selected ? mood : null;
-                      });
-                    },
-                    selectedColor: AppTheme.primaryColor.withOpacity(0.3),
-                    labelStyle: TextStyle(
-                      color: isSelected
-                          ? AppTheme.primaryColor
-                          : AppTheme.onSurfaceColor,
-                    ),
-                  );
-                }).toList(),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: contentController,
+              decoration: const InputDecoration(
+                hintText: 'What\'s on your mind?',
+                border: InputBorder.none,
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'Write your thoughts...',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: contentController,
-                decoration: const InputDecoration(
-                  hintText: 'Pour your heart out...',
-                ),
-                maxLines: 6,
-                style: const TextStyle(fontSize: 16, height: 1.6),
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Save Note'),
-              ),
-            ],
-          ),
+              maxLines: 8,
+              style: const TextStyle(fontSize: 18, height: 1.6),
+              autofocus: true,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Save'),
+            ),
+          ],
         ),
       ),
     );
 
     if (result == true && contentController.text.isNotEmpty) {
       final now = DateTime.now();
-      final note = Note(
+      // Save as unified Entry
+      final entry = Entry(
         id: const Uuid().v4(),
+        type: EntryType.journal,
         content: contentController.text,
-        mood: selectedMood,
         createdAt: now,
         updatedAt: now,
       );
 
-      await DatabaseHelper.instance.insert('notes', note.toMap());
+      await DatabaseHelper.instance.insertEntry(entry);
       _loadNotes();
     }
   }
@@ -191,15 +179,462 @@ class _ShayariNotesScreenState extends State<ShayariNotesScreen> {
       appBar: AppBar(title: const Text('Zen Space')),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _notes.isEmpty
-          ? _buildEmptyState()
-          : _buildNotesList(),
+          : _entries.isEmpty
+              ? _buildEmptyState()
+              : _buildNotesList(),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addNote,
-        icon: const Icon(Icons.edit),
-        label: const Text('Write'),
+        onPressed: _showCreateOptions,
+        icon: const Icon(Icons.add),
+        label: const Text('Create'),
       ),
     );
+  }
+
+  void _showCreateOptions() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.surfaceColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Create New',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildOptionTile(
+              icon: Icons.edit_note,
+              title: 'Journal',
+              color: AppTheme.primaryColor,
+              onTap: () {
+                Navigator.pop(context);
+                _addNote();
+              },
+            ),
+            _buildOptionTile(
+              icon: Icons.nightlight_round,
+              title: 'Midnight Thought',
+              color: Colors.green.shade700,
+              onTap: () {
+                Navigator.pop(context);
+                _addMidnightThought();
+              },
+            ),
+            _buildOptionTile(
+              icon: Icons.lightbulb,
+              title: 'Spark (Idea)',
+              color: Colors.amber,
+              onTap: () {
+                Navigator.pop(context);
+                _addSpark();
+              },
+            ),
+            _buildOptionTile(
+              icon: Icons.movie,
+              title: 'Media Review',
+              color: Colors.purple,
+              onTap: () {
+                Navigator.pop(context);
+                _addMedia();
+              },
+            ),
+            _buildOptionTile(
+              icon: Icons.cloud,
+              title: 'Dream',
+              color: Colors.indigo,
+              onTap: () {
+                Navigator.pop(context);
+                _addDream();
+              },
+            ),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOptionTile({
+    required IconData icon,
+    required String title,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(icon, color: color),
+      ),
+      title: Text(title),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onTap,
+    );
+  }
+
+  Future<void> _addMidnightThought() async {
+    final contentController = TextEditingController();
+
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.black,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.terminal, color: Colors.green.shade700, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  'Midnight Thought',
+                  style: TextStyle(
+                    color: Colors.green,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            TextField(
+              controller: contentController,
+              decoration: const InputDecoration(
+                hintText: 'What\'s on your mind?',
+                hintStyle: TextStyle(color: Colors.green),
+                border: InputBorder.none,
+              ),
+              style: const TextStyle(color: Colors.green, fontSize: 16),
+              maxLines: 8,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green.shade700,
+              ),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (result == true && contentController.text.isNotEmpty) {
+      final entry = Entry(
+        id: const Uuid().v4(),
+        type: EntryType.midnightThought,
+        content: contentController.text,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      await DatabaseHelper.instance.insertEntry(entry);
+      _loadNotes();
+    }
+  }
+
+  Future<void> _addSpark() async {
+    final contentController = TextEditingController();
+
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.surfaceColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.lightbulb, color: Colors.amber, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  'Spark (Idea)',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            TextField(
+              controller: contentController,
+              decoration: const InputDecoration(
+                hintText: 'Got an idea? Write it down!',
+              ),
+              maxLines: 4,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber,
+              ),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (result == true && contentController.text.isNotEmpty) {
+      final entry = Entry(
+        id: const Uuid().v4(),
+        type: EntryType.spark,
+        content: contentController.text,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      await DatabaseHelper.instance.insertEntry(entry);
+      _loadNotes();
+    }
+  }
+
+  Future<void> _addMedia() async {
+    final titleController = TextEditingController();
+    final contentController = TextEditingController();
+    int rating = 3;
+
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.surfaceColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.movie, color: Colors.purple, size: 20),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Media Review',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(
+                    hintText: 'Movie/Book name',
+                    labelText: 'Title',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: contentController,
+                  decoration: const InputDecoration(
+                    hintText: 'Your thoughts...',
+                    labelText: 'Review',
+                  ),
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 16),
+                const Text('Rating'),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(5, (index) {
+                    return IconButton(
+                      icon: Icon(
+                        index < rating ? Icons.star : Icons.star_border,
+                        color: Colors.amber,
+                        size: 32,
+                      ),
+                      onPressed: () {
+                        setModalState(() {
+                          rating = index + 1;
+                        });
+                      },
+                    );
+                  }),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purple,
+                  ),
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (result == true &&
+        (titleController.text.isNotEmpty ||
+            contentController.text.isNotEmpty)) {
+      final entry = Entry(
+        id: const Uuid().v4(),
+        type: EntryType.media,
+        title: titleController.text.isNotEmpty ? titleController.text : null,
+        content: contentController.text,
+        metadata: {'rating': rating},
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      await DatabaseHelper.instance.insertEntry(entry);
+      _loadNotes();
+    }
+  }
+
+  Future<void> _addDream() async {
+    final titleController = TextEditingController();
+    final contentController = TextEditingController();
+    int clarity = 3;
+
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.surfaceColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.cloud, color: Colors.indigo, size: 20),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Dream',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(
+                    hintText: 'Dream title (optional)',
+                    labelText: 'Title',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: contentController,
+                  decoration: const InputDecoration(
+                    hintText: 'Describe your dream...',
+                    labelText: 'Dream',
+                  ),
+                  maxLines: 4,
+                ),
+                const SizedBox(height: 16),
+                const Text('Clarity'),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(5, (index) {
+                    return IconButton(
+                      icon: Icon(
+                        index < clarity ? Icons.cloud : Icons.cloud_outlined,
+                        color: Colors.indigo,
+                        size: 32,
+                      ),
+                      onPressed: () {
+                        setModalState(() {
+                          clarity = index + 1;
+                        });
+                      },
+                    );
+                  }),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.indigo,
+                  ),
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (result == true && contentController.text.isNotEmpty) {
+      final entry = Entry(
+        id: const Uuid().v4(),
+        type: EntryType.dream,
+        title: titleController.text.isNotEmpty ? titleController.text : null,
+        content: contentController.text,
+        metadata: {'rating': clarity},
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      await DatabaseHelper.instance.insertEntry(entry);
+      _loadNotes();
+    }
   }
 
   Widget _buildEmptyState() {
@@ -233,73 +668,62 @@ class _ShayariNotesScreenState extends State<ShayariNotesScreen> {
   Widget _buildNotesList() {
     return ListView.builder(
       padding: const EdgeInsets.all(16),
-      itemCount: _notes.length,
+      itemCount: _entries.length,
       itemBuilder: (context, index) {
-        final note = _notes[index];
-        return _buildNoteCard(note);
+        final entry = _entries[index];
+        return _buildEntryCard(entry);
       },
     );
   }
 
-  Widget _buildNoteCard(Note note) {
-    final dateFormat = DateFormat('MMM d, yyyy • h:mm a');
-    final moodColor = _getMoodColor(note.mood);
+  Widget _buildEntryCard(Entry entry) {
+    final dateFormat = DateFormat('h:mm a');
+    final entryColor = _getEntryColor(entry.type);
 
     return GestureDetector(
-      onTap: () => _showNoteDetails(note),
-      onLongPress: () => _deleteNote(note),
+      onTap: () => _showEntryDetails(entry),
+      onLongPress: () => _deleteEntry(entry),
       child: Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        padding: const EdgeInsets.all(20),
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AppTheme.surfaceColor,
-          borderRadius: BorderRadius.circular(16),
-          border: Border(left: BorderSide(color: moodColor, width: 4)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
+          borderRadius: BorderRadius.circular(12),
+          border: Border(
+            left: BorderSide(color: entryColor, width: 3),
+          ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (note.mood != null) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: moodColor.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  note.mood!,
+            Row(
+              children: [
+                Icon(_getEntryIcon(entry.type), color: entryColor, size: 16),
+                const SizedBox(width: 8),
+                Text(
+                  entry.type.displayName,
                   style: TextStyle(
-                    color: moodColor,
+                    color: entryColor,
                     fontWeight: FontWeight.w600,
                     fontSize: 12,
                   ),
                 ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            Text(
-              note.content,
-              style: const TextStyle(fontSize: 15, height: 1.6),
-              maxLines: 4,
-              overflow: TextOverflow.ellipsis,
+                const Spacer(),
+                Text(
+                  dateFormat.format(entry.createdAt),
+                  style: TextStyle(
+                    color: AppTheme.onSurfaceColor.withOpacity(0.5),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             Text(
-              dateFormat.format(note.createdAt),
-              style: TextStyle(
-                color: AppTheme.onSurfaceColor.withOpacity(0.4),
-                fontSize: 11,
-              ),
+              entry.content,
+              style: const TextStyle(fontSize: 15, height: 1.5),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -307,9 +731,71 @@ class _ShayariNotesScreenState extends State<ShayariNotesScreen> {
     );
   }
 
-  void _showNoteDetails(Note note) {
+  Color _getEntryColor(EntryType type) {
+    switch (type) {
+      case EntryType.journal:
+        return AppTheme.primaryColor;
+      case EntryType.midnightThought:
+        return Colors.green.shade700;
+      case EntryType.spark:
+        return Colors.amber.shade700;
+      case EntryType.media:
+        return Colors.purple;
+      case EntryType.dream:
+        return Colors.indigo;
+      default:
+        return AppTheme.primaryColor;
+    }
+  }
+
+  IconData _getEntryIcon(EntryType type) {
+    switch (type) {
+      case EntryType.journal:
+        return Icons.edit_note;
+      case EntryType.midnightThought:
+        return Icons.nightlight_round;
+      case EntryType.spark:
+        return Icons.lightbulb;
+      case EntryType.media:
+        return Icons.movie;
+      case EntryType.dream:
+        return Icons.cloud;
+      default:
+        return Icons.edit_note;
+    }
+  }
+
+  Future<void> _deleteEntry(Entry entry) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Entry'),
+        content: const Text('Are you sure you want to delete this entry?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.errorColor,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await DatabaseHelper.instance.deleteEntry(entry.id);
+      _loadNotes();
+    }
+  }
+
+  void _showEntryDetails(Entry entry) {
     final dateFormat = DateFormat('EEEE, MMMM d, yyyy • h:mm a');
-    final moodColor = _getMoodColor(note.mood);
+    final entryColor = _getEntryColor(entry.type);
 
     showDialog(
       context: context,
@@ -325,33 +811,28 @@ class _ShayariNotesScreenState extends State<ShayariNotesScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (note.mood != null) ...[
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: moodColor.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    note.mood!,
+              Row(
+                children: [
+                  Icon(_getEntryIcon(entry.type), color: entryColor, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    entry.type.displayName,
                     style: TextStyle(
-                      color: moodColor,
-                      fontWeight: FontWeight.w600,
+                      color: entryColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
                     ),
                   ),
-                ),
-                const SizedBox(height: 16),
-              ],
+                ],
+              ),
+              const SizedBox(height: 16),
               Text(
-                note.content,
+                entry.content,
                 style: const TextStyle(fontSize: 16, height: 1.8),
               ),
               const SizedBox(height: 20),
               Text(
-                dateFormat.format(note.createdAt),
+                dateFormat.format(entry.createdAt),
                 style: TextStyle(
                   color: AppTheme.onSurfaceColor.withOpacity(0.5),
                   fontSize: 12,

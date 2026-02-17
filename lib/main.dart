@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
 import 'data/database/database_helper.dart';
 
@@ -29,7 +30,7 @@ void main() async {
   await DatabaseHelper.instance.initializeDefaultCategories();
   await DatabaseHelper.instance.initializeDefaultPaymentModes();
 
-  runApp(const JournalXApp());
+  runApp(const ProviderScope(child: JournalXApp()));
 }
 
 Future<bool> _requestNotificationPermission() async {

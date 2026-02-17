@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/app_theme.dart';
+import 'features/timeline/timeline_screen.dart';
 import 'features/food_logger/food_logger_screen.dart';
 import 'features/shayari_notes/shayari_notes_screen.dart';
 import 'features/expense_tracker/expense_tracker_screen.dart';
 import 'features/search/search_screen.dart';
 import 'features/settings/settings_screen.dart';
+import 'data/models/entry_type.dart';
+import 'providers/module_providers.dart';
 
 class JournalXApp extends StatelessWidget {
   const JournalXApp({super.key});
@@ -29,14 +33,40 @@ class MainNavigationScreen extends StatefulWidget {
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
+  final GlobalKey _timelineKey = GlobalKey();
 
-  final List<Widget> _screens = const [
-    FoodLoggerScreen(),
-    ShayariNotesScreen(),
-    ExpenseTrackerScreen(),
-    SearchScreen(),
-    SettingsScreen(),
-  ];
+  late List<Widget> _screens;
+
+  @override
+  void initState() {
+    super.initState();
+    _initScreens();
+  }
+
+  void _initScreens() {
+    _screens = [
+      TimelineScreen(key: _timelineKey),
+      const FoodLoggerScreen(),
+      const ShayariNotesScreen(),
+      const ExpenseTrackerScreen(),
+      const SearchScreen(),
+      const SettingsScreen(),
+    ];
+  }
+
+  void _onTabChanged(int index) {
+    // Refresh timeline when switching to it
+    if (index == 0) {
+      final timelineState = _timelineKey.currentState;
+      if (timelineState != null) {
+        // Call the refresh method via dynamic to avoid type issues
+        (timelineState as dynamic).refresh();
+      }
+    }
+    setState(() {
+      _currentIndex = index;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,12 +77,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
-        onDestinationSelected: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
+        onDestinationSelected: _onTabChanged,
         destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.timeline_outlined),
+            selectedIcon: Icon(Icons.timeline),
+            label: 'Timeline',
+          ),
           NavigationDestination(
             icon: Icon(Icons.restaurant_menu_outlined),
             selectedIcon: Icon(Icons.restaurant_menu),

@@ -1,8 +1,14 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:open_filex/open_filex.dart';
 import '../../data/models/app_settings.dart';
+import '../../data/models/entry_type.dart';
 import '../../data/database/database_helper.dart';
 import '../../core/theme/app_theme.dart';
 import '../../main.dart';
+import '../../providers/module_providers.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -52,17 +58,194 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: _isLoading || _settings == null
           ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _buildCurrencySection(),
-                const SizedBox(height: 24),
-                _buildAppDetectionSection(),
-                const SizedBox(height: 24),
-                _buildAboutSection(),
-              ],
+          : Consumer(
+              builder: (context, ref, child) {
+                return ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    _buildCurrencySection(),
+                    const SizedBox(height: 24),
+                    _buildAppDetectionSection(),
+                    const SizedBox(height: 24),
+                    _buildModulesSection(ref),
+                    const SizedBox(height: 24),
+                    _buildStorageSection(),
+                    const SizedBox(height: 24),
+                    _buildDangerZoneSection(),
+                    const SizedBox(height: 24),
+                    _buildAboutSection(),
+                  ],
+                );
+              },
             ),
     );
+  }
+
+  Widget _buildStorageSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Storage',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'View and manage app data stored locally',
+          style: TextStyle(
+            color: AppTheme.onSurfaceColor.withOpacity(0.6),
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceColor,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: ListTile(
+            leading: const Icon(Icons.folder_open),
+            title: const Text('Open Data Folder'),
+            subtitle: const Text('View stored files in file manager'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _openDataFolder,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openDataFolder() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      await OpenFilex.open(directory.path);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error opening folder: $e')),
+        );
+      }
+    }
+  }
+
+  Widget _buildDangerZoneSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Danger Zone',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.red,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Irreversible actions - proceed with caution',
+          style: TextStyle(
+            color: AppTheme.onSurfaceColor.withOpacity(0.6),
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceColor,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.red.withOpacity(0.3)),
+          ),
+          child: ListTile(
+            leading: const Icon(Icons.delete_forever, color: Colors.red),
+            title: const Text(
+              'Reset Database',
+              style: TextStyle(color: Colors.red),
+            ),
+            subtitle: const Text('Delete all entries and reset app'),
+            trailing: const Icon(Icons.chevron_right, color: Colors.red),
+            onTap: _showResetConfirmation,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showResetConfirmation() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reset Database?'),
+        content: const Text(
+          'This will delete ALL your data including:\n\n'
+          '• Journal entries\n'
+          '• Food logs\n'
+          '• Expenses\n'
+          '• Notes\n'
+          '• All other entries\n\n'
+          'This action cannot be undone!',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _resetDatabase();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            child: const Text('Reset Everything'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _resetDatabase() async {
+    try {
+      final db = await DatabaseHelper.instance.database;
+
+      // Delete all data from tables
+      await db.delete('entries');
+      await db.delete('notes');
+      await db.delete('meals');
+      await db.delete('expenses');
+      await db.delete('categories');
+      await db.delete('payment_modes');
+
+      // Reset settings but keep module preferences
+      await db.update(
+          'settings',
+          {
+            'currencySymbol': '₹',
+            'appDetectionEnabled': 0,
+            'categoriesInitialized': 0,
+            'paymentModesInitialized': 0,
+          },
+          where: 'id = ?',
+          whereArgs: [1]);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Database has been reset. Please restart the app.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error resetting database: $e')),
+        );
+      }
+    }
   }
 
   Widget _buildCurrencySection() {
@@ -169,6 +352,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
         ],
+      ],
+    );
+  }
+
+  Widget _buildModulesSection(WidgetRef ref) {
+    final modules = ref.watch(moduleProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Modules',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Enable or disable features in your app',
+          style: TextStyle(
+            color: AppTheme.onSurfaceColor.withOpacity(0.6),
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceColor,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            children: EntryType.values.map((type) {
+              final isEnabled = modules[type] ?? true;
+              return SwitchListTile(
+                title: Text('${type.icon} ${type.displayName}'),
+                subtitle: Text(
+                  type.description,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.onSurfaceColor.withOpacity(0.6),
+                  ),
+                ),
+                value: isEnabled,
+                onChanged: (value) {
+                  ref.read(moduleProvider.notifier).toggleModule(type, value);
+                },
+              );
+            }).toList(),
+          ),
+        ),
       ],
     );
   }

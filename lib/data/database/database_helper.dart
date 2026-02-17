@@ -3,6 +3,8 @@ import 'package:path/path.dart';
 import '../models/category.dart';
 import '../models/payment_mode.dart';
 import '../models/app_settings.dart';
+import '../models/entry.dart';
+import '../models/entry_type.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -22,7 +24,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 2, // Incremented version for new tables
+      version: 3, // Incremented version for new tables
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -37,6 +39,27 @@ class DatabaseHelper {
 
       // Add paymentModeId column to expenses table
       await db.execute('ALTER TABLE expenses ADD COLUMN paymentModeId TEXT');
+    }
+
+    if (oldVersion < 3) {
+      // Add module enable columns to settings
+      await db.execute(
+          'ALTER TABLE settings ADD COLUMN moduleJournalEnabled INTEGER DEFAULT 1');
+      await db.execute(
+          'ALTER TABLE settings ADD COLUMN moduleFoodEnabled INTEGER DEFAULT 1');
+      await db.execute(
+          'ALTER TABLE settings ADD COLUMN moduleExpenseEnabled INTEGER DEFAULT 1');
+      await db.execute(
+          'ALTER TABLE settings ADD COLUMN moduleMidnightThoughtEnabled INTEGER DEFAULT 1');
+      await db.execute(
+          'ALTER TABLE settings ADD COLUMN moduleSparkEnabled INTEGER DEFAULT 1');
+      await db.execute(
+          'ALTER TABLE settings ADD COLUMN moduleMediaEnabled INTEGER DEFAULT 1');
+      await db.execute(
+          'ALTER TABLE settings ADD COLUMN moduleDreamEnabled INTEGER DEFAULT 1');
+
+      // Create entries table
+      await _createEntriesTable(db);
     }
   }
 
@@ -87,6 +110,9 @@ class DatabaseHelper {
     await _createCategoriesTable(db);
     await _createPaymentModesTable(db);
     await _createSettingsTable(db);
+
+    // Create unified entries table
+    await _createEntriesTable(db);
   }
 
   Future<void> _createCategoriesTable(Database db) async {
@@ -120,7 +146,14 @@ class DatabaseHelper {
         currencySymbol TEXT DEFAULT '₹',
         appDetectionEnabled INTEGER DEFAULT 0,
         categoriesInitialized INTEGER DEFAULT 0,
-        paymentModesInitialized INTEGER DEFAULT 0
+        paymentModesInitialized INTEGER DEFAULT 0,
+        moduleJournalEnabled INTEGER DEFAULT 1,
+        moduleFoodEnabled INTEGER DEFAULT 1,
+        moduleExpenseEnabled INTEGER DEFAULT 1,
+        moduleMidnightThoughtEnabled INTEGER DEFAULT 1,
+        moduleSparkEnabled INTEGER DEFAULT 1,
+        moduleMediaEnabled INTEGER DEFAULT 1,
+        moduleDreamEnabled INTEGER DEFAULT 1
       )
     ''');
 
@@ -131,7 +164,36 @@ class DatabaseHelper {
       'appDetectionEnabled': 0,
       'categoriesInitialized': 0,
       'paymentModesInitialized': 0,
+      'moduleJournalEnabled': 1,
+      'moduleFoodEnabled': 1,
+      'moduleExpenseEnabled': 1,
+      'moduleMidnightThoughtEnabled': 1,
+      'moduleSparkEnabled': 1,
+      'moduleMediaEnabled': 1,
+      'moduleDreamEnabled': 1,
     });
+  }
+
+  // ============== Unified Entries Table ==============
+
+  Future<void> _createEntriesTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE entries (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        title TEXT,
+        content TEXT NOT NULL,
+        imagePath TEXT,
+        metadata TEXT,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      )
+    ''');
+
+    // Create index for sorting
+    await db
+        .execute('CREATE INDEX idx_entries_createdAt ON entries(createdAt)');
+    await db.execute('CREATE INDEX idx_entries_type ON entries(type)');
   }
 
   // ============== Category Operations ==============
@@ -282,5 +344,44 @@ class DatabaseHelper {
   Future<void> close() async {
     final db = await database;
     db.close();
+  }
+
+  // ============== Unified Entry Operations ==============
+
+  Future<int> insertEntry(Entry entry) async {
+    final db = await database;
+    return await db.insert('entries', entry.toMap());
+  }
+
+  Future<List<Entry>> getAllEntries() async {
+    final db = await database;
+    final result = await db.query('entries', orderBy: 'createdAt DESC');
+    return result.map((map) => Entry.fromMap(map)).toList();
+  }
+
+  Future<List<Entry>> getEntriesByType(EntryType type) async {
+    final db = await database;
+    final result = await db.query(
+      'entries',
+      where: 'type = ?',
+      whereArgs: [type.name],
+      orderBy: 'createdAt DESC',
+    );
+    return result.map((map) => Entry.fromMap(map)).toList();
+  }
+
+  Future<int> updateEntry(Entry entry) async {
+    final db = await database;
+    return await db.update(
+      'entries',
+      entry.toMap(),
+      where: 'id = ?',
+      whereArgs: [entry.id],
+    );
+  }
+
+  Future<int> deleteEntry(String id) async {
+    final db = await database;
+    return await db.delete('entries', where: 'id = ?', whereArgs: [id]);
   }
 }
