@@ -6,9 +6,13 @@ import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Telephony
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import java.io.File
+import java.io.FileOutputStream
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -16,8 +20,15 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "android/PERMISSIONS"
     private val SMS_CHANNEL = "android/SMS"
+    private val EXPORT_CHANNEL = "android/EXPORT"
+    private val INTENT_CHANNEL = "android/INTENT"
     private val NOTIFICATION_PERMISSION_CODE = 100
     private val SMS_PERMISSION_CODE = 101
+    
+    // Store pending expense data
+    companion object {
+        var pendingExpenseData: Map<String, Any>? = null
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -43,6 +54,34 @@ class MainActivity : FlutterActivity() {
                 "readOldSms" -> {
                     val days = call.argument<Int>("days") ?: 7
                     readOldSms(days, result)
+                }
+                else -> {
+                    result.notImplemented()
+                }
+            }
+        }
+        
+        // Export operations channel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, EXPORT_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "saveToDownloads" -> {
+                    val filename = call.argument<String>("filename") ?: "export.csv"
+                    val content = call.argument<String>("content") ?: ""
+                    saveToDownloads(filename, content, result)
+                }
+                else -> {
+                    result.notImplemented()
+                }
+            }
+        }
+        
+        // Intent channel for pending expense data
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, INTENT_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getPendingIntent" -> {
+                    val data = pendingExpenseData
+                    pendingExpenseData = null  // Clear after reading
+                    result.success(data)
                 }
                 else -> {
                     result.notImplemented()
@@ -125,6 +164,40 @@ class MainActivity : FlutterActivity() {
             result.success(smsList)
         } catch (e: Exception) {
             result.error("READ_ERROR", e.message, null)
+        }
+    }
+
+    private fun saveToDownloads(filename: String, content: String, result: MethodChannel.Result) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Use MediaStore for Android 10+
+                val contentValues = android.content.ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                    put(MediaStore.Downloads.MIME_TYPE, "text/csv")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                uri?.let {
+                    contentResolver.openOutputStream(it)?.use { outputStream ->
+                        outputStream.write(content.toByteArray())
+                    }
+                    
+                    contentValues.clear()
+                    contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
+                    contentResolver.update(it, contentValues, null, null)
+                }
+            } else {
+                // For older versions, use direct file access
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val file = File(downloadsDir, filename)
+                FileOutputStream(file).use { outputStream ->
+                    outputStream.write(content.toByteArray())
+                }
+            }
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("EXPORT_ERROR", e.message, null)
         }
     }
 

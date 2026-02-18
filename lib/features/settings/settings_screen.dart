@@ -47,12 +47,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadSettings();
   }
 
-  Future<void> _toggleAppDetection(bool value) async {
-    await DatabaseHelper.instance
-        .updateSetting('appDetectionEnabled', value ? 1 : 0);
-    _loadSettings();
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -69,8 +63,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildCurrencySection(),
                     const SizedBox(height: 24),
                     _buildSmsDetectionSection(),
-                    const SizedBox(height: 24),
-                    _buildAppDetectionSection(),
                     const SizedBox(height: 24),
                     _buildModulesSection(ref),
                     const SizedBox(height: 24),
@@ -296,8 +288,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final List<dynamic> smsResult =
           await platform.invokeMethod('readOldSms', {'days': days});
 
+      // Track seen transactions to avoid duplicates
+      final seenTransactions = <String>{};
+
       // Parse and filter expenses, then save to database
       int savedCount = 0;
+      int skippedSelfTransfer = 0;
       for (final sms in smsResult) {
         final body = sms['body'] as String;
         final address = sms['address'] as String;
@@ -307,17 +303,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // Parse amount from message
           final amount = _parseAmount(body);
           if (amount != null && amount > 0) {
-            // Parse receiver/merchant
+            // Check for self-transfer
             final receiver = _parseReceiver(body);
+            if (_isSelfTransfer(body, receiver)) {
+              skippedSelfTransfer++;
+              continue;
+            }
+
+            // Skip duplicates based on amount + timestamp + rough description
+            final transactionKey =
+                '${amount}_${timestamp ~/ 60000}_${(receiver ?? "").substring(0, (receiver ?? "").length.clamp(0, 5))}';
+            if (seenTransactions.contains(transactionKey)) {
+              continue;
+            }
+            seenTransactions.add(transactionKey);
+
             final description = receiver ?? 'Imported from SMS';
 
-            // Create expense
+            // Detect category from merchant
+            final category = _detectCategory(body, description);
+
+            // Detect payment mode (card last 4 digits)
+            final cardLast4 = _detectCardLast4(body);
+
+            // Create expense with raw SMS for debugging
             final expense = Expense(
               id: const Uuid().v4(),
               amount: amount,
               description: description,
-              category: 'Other',
+              category: category,
+              paymentModeId: cardLast4,
               createdAt: DateTime.fromMillisecondsSinceEpoch(timestamp),
+              rawSms: body, // Save raw SMS for debugging
             );
 
             // Save to database
@@ -327,10 +344,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
       }
 
+      String message = 'Imported $savedCount expenses from $days days';
+      if (skippedSelfTransfer > 0) {
+        message += ' (skipped $skippedSelfTransfer self-transfers)';
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Imported $savedCount expenses from $days days'),
+            content: Text(message),
             backgroundColor: Colors.green,
           ),
         );
@@ -378,11 +400,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _parseReceiver(String message) {
     final msg = message.toUpperCase();
 
-    // Patterns to find merchant/receiver
+    // First, try to get merchant name from "AT" pattern (for card transactions)
+    final atPattern = RegExp(r'AT\s+([A-Z][A-Z0-9\s]+)', caseSensitive: false);
+    final atMatch = atPattern.firstMatch(msg);
+    if (atMatch != null) {
+      var value = atMatch.group(1)?.trim() ?? '';
+      // Clean up the merchant name - remove trailing dates like "ON 2026", "ON 15/02/26"
+      value = value
+          .replaceAll(RegExp(r'\s+ON\s*\d{1,2}[-/]\d{1,2}[-/]\d{2,4}.*'), '')
+          .trim();
+      value = value.replaceAll(RegExp(r'\s+ON\s*\d{2,4}.*'), '').trim();
+      value = value.replaceAll(RegExp(r'\s+Not.*'), '').trim();
+      value = value.replaceAll(RegExp(r'\s+To\s+Block.*'), '').trim();
+      if (value.length >= 2 && value.length <= 40) {
+        return value;
+      }
+    }
+
+    // For card transactions with "Spent ... At", extract the merchant
+    final spentAtPattern = RegExp(
+        r'SPENT\s+(?:RS\.?|INR)?\s*[\d,]+\s+(?:ON\s+)?(?:YOUR\s+)?[A-Z]+\s+CARD\s+(?:ENDING\s+)?\d+\s+AT\s+([A-Z][A-Z0-9\s]+)',
+        caseSensitive: false);
+    final spentMatch = spentAtPattern.firstMatch(msg);
+    if (spentMatch != null) {
+      var value = spentMatch.group(1)?.trim() ?? '';
+      value = value.replaceAll(RegExp(r'\s+On.*'), '').trim();
+      if (value.length >= 2 && value.length <= 40) {
+        return value;
+      }
+    }
+
+    // Patterns to find person/receiver for UPI transfers
     final patterns = [
       RegExp(r'TO\s+([A-Z][A-Z\s]+)'),
       RegExp(r'PAID\s+TO\s+([A-Z][A-Z0-9@]+)'),
-      RegExp(r'AT\s+([A-Z][A-Z0-9\s]+)'),
       RegExp(r'SENT\s+TO\s+([A-Z][A-Z\s]+)'),
     ];
 
@@ -411,6 +462,248 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return null;
   }
 
+  // Check if transaction is a self-transfer (same person sending to themselves)
+  bool _isSelfTransfer(String message, String? receiver) {
+    if (receiver == null) return false;
+    final msg = message.toUpperCase();
+
+    // Pattern 1: Check if it's a UPI "Sent" transaction (likely self-transfer if amount is high)
+    if (msg.contains('SENT RS.') || msg.contains('SENT RS')) {
+      // If it's "Sent" and the message contains bank account (not a merchant), it's likely self-transfer
+      if (msg.contains('FROM HDFC') ||
+          msg.contains('FROM SBI') ||
+          msg.contains('FROM ICICI') ||
+          msg.contains('FROM AXIS') ||
+          msg.contains('FROM KOTAK') ||
+          msg.contains('FROM YES')) {
+        // Check if receiver looks like a person's name (not a merchant)
+        if (receiver.length < 20 &&
+            !receiver.contains('LIMITED') &&
+            !receiver.contains('TECHNOLOGIES') &&
+            !receiver.contains('SERVICES')) {
+          // This is likely a self-transfer to another account
+          return true;
+        }
+      }
+    }
+
+    // Pattern 2: Compare sender and receiver names
+    final senderPatterns = [
+      RegExp(r'FROM\s+([A-Z][A-Z\s]+)', caseSensitive: false),
+      RegExp(r'BY\s+([A-Z][A-Z\s]+)', caseSensitive: false),
+    ];
+
+    for (final pattern in senderPatterns) {
+      final match = pattern.firstMatch(msg);
+      if (match != null) {
+        final sender = match.group(1)?.toUpperCase().trim() ?? '';
+        // Compare sender and receiver (simple check)
+        final receiverClean = receiver.toUpperCase().replaceAll(' ', '');
+        final senderClean = sender.replaceAll(' ', '');
+
+        // If sender and receiver seem similar (partial match), it's likely self-transfer
+        if (senderClean.isNotEmpty && receiverClean.isNotEmpty) {
+          if (senderClean.contains(receiverClean) ||
+              receiverClean.contains(senderClean)) {
+            return true;
+          }
+          // Also check if first names match
+          final senderFirst = senderClean.split(' ').first;
+          final receiverFirst = receiverClean.split(' ').first;
+          if (senderFirst.length > 2 && senderFirst == receiverFirst) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  // Detect category from merchant/description
+  String _detectCategory(String message, String description) {
+    final msg = message.toUpperCase();
+    final desc = description.toUpperCase();
+
+    // FIRST: Check for E-mandate/Auto-debit/Recurring payments - HIGHEST PRIORITY
+    if (msg.contains('E-MANDATE') ||
+        msg.contains('E MANDATE') ||
+        msg.contains('AUTO DEBIT') ||
+        msg.contains('AUTOMATIC DEBIT') ||
+        msg.contains('AUTO DEBITED') ||
+        msg.contains('WILL BE AUTO') ||
+        msg.contains('STANDING INSTRUCTION')) {
+      return 'Recurring';
+    }
+
+    // Skip if it's a bill payment notification (not a purchase)
+    if (msg.contains('OUTSTANDING') ||
+        msg.contains('DUE ON') ||
+        msg.contains('MIN. AMOUNT') ||
+        msg.contains('PLEASE IGNORE') ||
+        msg.contains('QUICKPAY') ||
+        msg.contains('CARDHOLDER') && msg.contains('OUTSTANDING')) {
+      return 'Other';
+    }
+
+    // Food & Delivery
+    if (msg.contains('SWIGGY') ||
+        desc.contains('SWIGGY') ||
+        msg.contains('ZOMATO') ||
+        desc.contains('ZOMATO') ||
+        msg.contains('FOOD') ||
+        desc.contains('FOOD') ||
+        msg.contains('RESTAURANT') ||
+        desc.contains('RESTAURANT')) {
+      return 'Food';
+    }
+
+    // Shopping
+    if (msg.contains('AMAZON') ||
+        desc.contains('AMAZON') ||
+        msg.contains('FLIPKART') ||
+        desc.contains('FLIPKART') ||
+        msg.contains('MYNTRA') ||
+        desc.contains('MYNTRA') ||
+        msg.contains('SHOP') ||
+        desc.contains('SHOP') ||
+        msg.contains('BUNDL') ||
+        desc.contains('BUNDL')) {
+      return 'Shopping';
+    }
+
+    // Transport
+    if (msg.contains('UBER') ||
+        desc.contains('UBER') ||
+        msg.contains('OLA') ||
+        desc.contains('OLA') ||
+        msg.contains('RAPIDO') ||
+        desc.contains('RAPIDO') ||
+        msg.contains('AUTO') ||
+        desc.contains('AUTO') ||
+        msg.contains('BUS') ||
+        desc.contains('BUS') ||
+        msg.contains('TRAIN') ||
+        desc.contains('TRAIN') ||
+        msg.contains('METRO') ||
+        desc.contains('METRO')) {
+      return 'Transport';
+    }
+
+    // Entertainment
+    if (msg.contains('NETFLIX') ||
+        desc.contains('NETFLIX') ||
+        msg.contains('PRIME') ||
+        desc.contains('PRIME') ||
+        msg.contains('HOTSTAR') ||
+        desc.contains('HOTSTAR') ||
+        msg.contains('DISNEY') ||
+        desc.contains('DISNEY') ||
+        msg.contains('SPOTIFY') ||
+        desc.contains('SPOTIFY') ||
+        msg.contains('BOOKMYSHOW') ||
+        desc.contains('BOOKMYSHOW') ||
+        msg.contains('MOVIE') ||
+        desc.contains('MOVIE')) {
+      return 'Entertainment';
+    }
+
+    // Bills & Utilities
+    if (msg.contains('ELECTRICITY') ||
+        desc.contains('ELECTRICITY') ||
+        msg.contains('WATER') ||
+        desc.contains('WATER') ||
+        msg.contains('GAS') ||
+        desc.contains('GAS') ||
+        msg.contains('INTERNET') ||
+        desc.contains('INTERNET') ||
+        msg.contains('MOBILE RECHARGE') ||
+        desc.contains('MOBILE') ||
+        msg.contains('DTH') ||
+        desc.contains('DTH')) {
+      return 'Bills';
+    }
+
+    // Health
+    if (msg.contains('MEDICINE') ||
+        desc.contains('MEDICINE') ||
+        msg.contains('PHARMACY') ||
+        desc.contains('PHARMACY') ||
+        msg.contains('HOSPITAL') ||
+        desc.contains('HOSPITAL') ||
+        msg.contains('DOCTOR') ||
+        desc.contains('DOCTOR') ||
+        msg.contains('HEALTH') ||
+        desc.contains('HEALTH')) {
+      return 'Health';
+    }
+
+    // Insurance - only actual insurance with explicit premium/policy keywords
+    if ((msg.contains('INSURANCE') || desc.contains('INSURANCE')) &&
+        (msg.contains('PREMIUM') ||
+            msg.contains('POLICY') ||
+            msg.contains('CLAIM'))) {
+      return 'Insurance';
+    }
+
+    if (msg.contains('LIC') || desc.contains('LIC')) {
+      return 'Insurance';
+    }
+
+    // Explicit TATA AIA premium
+    if ((msg.contains('TATA AIA') || desc.contains('TATA AIA')) &&
+        msg.contains('PREMIUM')) {
+      return 'Insurance';
+    }
+
+    // Education
+    if (msg.contains('COURSE') ||
+        desc.contains('COURSE') ||
+        msg.contains('EDUCATION') ||
+        desc.contains('EDUCATION') ||
+        msg.contains('TUITION') ||
+        desc.contains('TUITION') ||
+        msg.contains('BOOK') ||
+        desc.contains('BOOK')) {
+      return 'Education';
+    }
+
+    // Tech/Subscriptions
+    if ((msg.contains('GOOGLE PLAY') || desc.contains('GOOGLE PLAY')) ||
+        msg.contains('APPLE') ||
+        desc.contains('APPLE') ||
+        msg.contains('MICROSOFT') ||
+        desc.contains('MICROSOFT') ||
+        msg.contains('SPOTIFY') ||
+        desc.contains('SPOTIFY')) {
+      return 'Tech';
+    }
+
+    return 'Other';
+  }
+
+  // Detect card last 4 digits from message
+  String? _detectCardLast4(String message) {
+    final msg = message.toUpperCase();
+
+    // Pattern 1: "Card 4286" or "Card ending 4286"
+    final cardPatterns = [
+      RegExp(r'CARD\s*(?:ENDING\s*)?(\d{4})', caseSensitive: false),
+      RegExp(r'ENDING\s*(\d{4})', caseSensitive: false),
+      RegExp(r'\*(\d{4})\b', caseSensitive: false),
+      RegExp(r'XX(\d{4})', caseSensitive: false),
+    ];
+
+    for (final pattern in cardPatterns) {
+      final match = pattern.firstMatch(msg);
+      if (match != null) {
+        return match.group(1);
+      }
+    }
+
+    return null;
+  }
+
   Widget _buildStorageSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -431,6 +724,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
         const SizedBox(height: 16),
+
+        // Open Data Folder
         Container(
           decoration: BoxDecoration(
             color: AppTheme.surfaceColor,
@@ -442,6 +737,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             subtitle: const Text('View stored files in file manager'),
             trailing: const Icon(Icons.chevron_right),
             onTap: _openDataFolder,
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // Export to CSV
+        Container(
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceColor,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: ListTile(
+            leading: const Icon(Icons.download),
+            title: const Text('Export Expenses to CSV'),
+            subtitle: const Text('Includes raw SMS for debugging'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _exportExpensesToCsv,
           ),
         ),
       ],
@@ -456,6 +768,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error opening folder: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportExpensesToCsv() async {
+    try {
+      // Show loading
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) =>
+              const Center(child: CircularProgressIndicator()),
+        );
+      }
+
+      // Fetch all expenses
+      final expensesData = await DatabaseHelper.instance.queryAll('expenses');
+      final expenses = expensesData.map((map) => Expense.fromMap(map)).toList();
+
+      if (expenses.isEmpty) {
+        if (mounted) Navigator.pop(context);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No expenses to export')),
+          );
+        }
+        return;
+      }
+
+      // Build CSV content
+      final csvLines = <String>[];
+
+      // Header with raw SMS for debugging
+      csvLines.add('Date,Amount,Category,PaymentMode,Description,Raw SMS');
+
+      for (final expense in expenses) {
+        // Escape quotes in raw SMS
+        final rawSms = expense.rawSms?.replaceAll('"', '""') ?? '';
+        final description = expense.description.replaceAll('"', '""');
+        final paymentMode = expense.paymentModeId ?? '';
+
+        csvLines.add(
+            '${expense.createdAt.toIso8601String()},${expense.amount},${expense.category},"$paymentMode","$description","$rawSms"');
+      }
+
+      final csvContent = csvLines.join('\n');
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = 'expenses_$timestamp.csv';
+
+      // Try to save to Downloads using platform channel
+      try {
+        const platform = MethodChannel('android/EXPORT');
+        await platform.invokeMethod('saveToDownloads', {
+          'filename': fileName,
+          'content': csvContent,
+        });
+
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content:
+                  Text('Exported ${expenses.length} expenses to Downloads'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        // Fallback: save to app directory and share
+        final directory = await getApplicationDocumentsDirectory();
+        final filePath = '${directory.path}/$fileName';
+        final file = File(filePath);
+        await file.writeAsString(csvContent);
+
+        if (mounted) {
+          Navigator.pop(context);
+          // Show share dialog
+          await OpenFilex.open(filePath);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
         );
       }
     }
@@ -621,67 +1020,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             }).toList(),
           ),
         ),
-      ],
-    );
-  }
-
-  Widget _buildAppDetectionSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'App Detection',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'Get notified when you open payment apps like GPay or PhonePe',
-          style: TextStyle(
-            color: AppTheme.onSurfaceColor.withOpacity(0.6),
-            fontSize: 14,
-          ),
-        ),
-        const SizedBox(height: 16),
-        Container(
-          decoration: BoxDecoration(
-            color: AppTheme.surfaceColor,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: SwitchListTile(
-            title: const Text('Enable App Detection'),
-            subtitle: const Text(
-              'Shows notification to log expense when GPay or PhonePe is opened',
-            ),
-            value: _settings!.appDetectionEnabled,
-            onChanged: _toggleAppDetection,
-          ),
-        ),
-        if (_settings!.appDetectionEnabled) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.orange.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.orange.withOpacity(0.3)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.info_outline, color: Colors.orange),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Go to Settings > Accessibility > JournalX and enable the service for this feature to work.',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ],
     );
   }

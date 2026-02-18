@@ -24,7 +24,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 3, // Incremented version for new tables
+      version: 5, // Incremented version for new columns
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -61,6 +61,11 @@ class DatabaseHelper {
       // Create entries table
       await _createEntriesTable(db);
     }
+
+    if (oldVersion < 4) {
+      // Add rawSms column for debugging
+      await db.execute('ALTER TABLE expenses ADD COLUMN rawSms TEXT');
+    }
   }
 
   Future<void> _createDB(Database db, int version) async {
@@ -94,7 +99,8 @@ class DatabaseHelper {
         description TEXT NOT NULL,
         category TEXT NOT NULL,
         paymentModeId TEXT,
-        createdAt TEXT NOT NULL
+        createdAt TEXT NOT NULL,
+        rawSms TEXT
       )
     ''');
 

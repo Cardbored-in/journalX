@@ -5,6 +5,7 @@ class Expense {
   final String category;
   final String? paymentModeId;
   final DateTime createdAt;
+  final String? rawSms; // Debug: raw SMS message for debugging
 
   Expense({
     required this.id,
@@ -13,6 +14,7 @@ class Expense {
     required this.category,
     this.paymentModeId,
     required this.createdAt,
+    this.rawSms,
   });
 
   Map<String, dynamic> toMap() {
@@ -23,6 +25,7 @@ class Expense {
       'category': category,
       'paymentModeId': paymentModeId,
       'createdAt': createdAt.toIso8601String(),
+      'rawSms': rawSms,
     };
   }
 
@@ -34,6 +37,7 @@ class Expense {
       category: map['category'] as String,
       paymentModeId: map['paymentModeId'] as String?,
       createdAt: DateTime.parse(map['createdAt'] as String),
+      rawSms: map['rawSms'] as String?,
     );
   }
 
@@ -44,6 +48,7 @@ class Expense {
     String? category,
     String? paymentModeId,
     DateTime? createdAt,
+    String? rawSms,
   }) {
     return Expense(
       id: id ?? this.id,
@@ -52,6 +57,7 @@ class Expense {
       category: category ?? this.category,
       paymentModeId: paymentModeId ?? this.paymentModeId,
       createdAt: createdAt ?? this.createdAt,
+      rawSms: rawSms ?? this.rawSms,
     );
   }
 }
@@ -70,6 +76,7 @@ class ExpenseCategories {
     'Tech',
     'Travel',
     'Education',
+    'Recurring',
     'Other',
   ];
 
@@ -93,6 +100,8 @@ class ExpenseCategories {
         return '✈️';
       case 'Education':
         return '📚';
+      case 'Recurring':
+        return '🔄';
       default:
         return '💰';
     }

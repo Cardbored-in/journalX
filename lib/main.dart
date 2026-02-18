@@ -10,6 +10,10 @@ String get buildVersion {
   return 'v${now.year}.${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')}.${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
 }
 
+// Provider for pending expense data from notification
+final pendingExpenseProvider =
+    StateProvider<Map<String, dynamic>?>((ref) => null);
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
