@@ -293,7 +293,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       // Parse and filter expenses, then save to database
       int savedCount = 0;
-      int skippedSelfTransfer = 0;
       for (final sms in smsResult) {
         final body = sms['body'] as String;
         final address = sms['address'] as String;
@@ -303,12 +302,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // Parse amount from message
           final amount = _parseAmount(body);
           if (amount != null && amount > 0) {
-            // Check for self-transfer
+            // Parse receiver
             final receiver = _parseReceiver(body);
-            if (_isSelfTransfer(body, receiver)) {
-              skippedSelfTransfer++;
-              continue;
-            }
 
             // Skip duplicates based on amount + timestamp + rough description
             final transactionKey =
@@ -345,9 +340,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
 
       String message = 'Imported $savedCount expenses from $days days';
-      if (skippedSelfTransfer > 0) {
-        message += ' (skipped $skippedSelfTransfer self-transfers)';
-      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
