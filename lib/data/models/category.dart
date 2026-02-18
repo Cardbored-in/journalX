@@ -87,6 +87,18 @@ class Category {
           createdAt: now),
       Category(
           id: const Uuid().v4(),
+          name: 'Self Transfer',
+          icon: '🔄',
+          isDefault: true,
+          createdAt: now),
+      Category(
+          id: const Uuid().v4(),
+          name: 'Transfer',
+          icon: '↔️',
+          isDefault: true,
+          createdAt: now),
+      Category(
+          id: const Uuid().v4(),
           name: 'Other',
           icon: '💰',
           isDefault: true,
