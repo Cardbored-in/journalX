@@ -483,8 +483,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return 'Other';
   }
 
+  // Check if this SMS should be treated as an expense (not income, not reminders)
   bool _isExpenseMessage(String message) {
     final msg = message.toUpperCase();
+
+    // FIRST: Filter OUT incoming money/income
+    // These are credits, not debits - skip them
+    if (_isIncomingMoney(msg)) {
+      return false;
+    }
+
+    // SECOND: Filter OUT EMI/Bill reminders and notifications
+    // These are not actual expenses, just reminders
+    if (_isReminderNotification(msg)) {
+      return false;
+    }
+
+    // Only include actual debit/expense messages
     return msg.contains('DEBITED') ||
         msg.contains('PAID') ||
         msg.contains('CHARGED') ||
@@ -493,6 +508,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
         msg.contains('TRANSACTION') ||
         msg.contains('SENT') ||
         msg.contains('DEBIT');
+  }
+
+  // Check if message is incoming money (credit/income) - skip these
+  bool _isIncomingMoney(String msg) {
+    return msg.contains('CREDITED') ||
+        msg.contains('RECEIVED') ||
+        msg.contains('DEPOSITED') ||
+        msg.contains('SALARY') ||
+        msg.contains('REFUND') ||
+        msg.contains('REVERSAL') ||
+        msg.contains('RETURNED') ||
+        msg.contains('CREDIT') ||
+        msg.contains('UPI CREDIT') ||
+        msg.contains('CASHBACK') ||
+        msg.contains('EARNED') ||
+        msg.contains('INCOME');
+  }
+
+  // Check if message is a reminder/notification (not actual expense)
+  bool _isReminderNotification(String msg) {
+    return msg.contains('DUE') ||
+        msg.contains('WILL BE AUTO') ||
+        msg.contains('AUTO-DEBITED') ||
+        msg.contains('EMI WILL') ||
+        msg.contains('EMI OF') ||
+        msg.contains('LOAN') ||
+        msg.contains('PAYMENT DUE') ||
+        msg.contains('PLEASE IGNORE') ||
+        msg.contains('MAINTAIN SUFFICIENT') ||
+        msg.contains('KINDLY IGNORE') ||
+        msg.contains('IF ALREADY PAID') ||
+        msg.contains('COMPLETE YOUR PAYMENT') ||
+        msg.contains('MAKE A MANUAL PAYMENT') ||
+        msg.contains('AVOID CHARGES') ||
+        msg.contains('AVOID OVERDUE');
   }
 
   double? _parseAmount(String message) {
