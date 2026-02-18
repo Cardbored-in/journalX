@@ -14,13 +14,34 @@ class ShayariNotesScreen extends StatefulWidget {
   State<ShayariNotesScreen> createState() => _ShayariNotesScreenState();
 }
 
-class _ShayariNotesScreenState extends State<ShayariNotesScreen> {
+class _ShayariNotesScreenState extends State<ShayariNotesScreen>
+    with WidgetsBindingObserver {
   List<Entry> _entries = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadNotes();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadNotes();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     _loadNotes();
   }
 

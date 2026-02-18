@@ -33,48 +33,37 @@ class MainNavigationScreen extends StatefulWidget {
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
-  final GlobalKey _timelineKey = GlobalKey();
-
-  late List<Widget> _screens;
-
-  @override
-  void initState() {
-    super.initState();
-    _initScreens();
-  }
-
-  void _initScreens() {
-    _screens = [
-      TimelineScreen(key: _timelineKey),
-      const FoodLoggerScreen(),
-      const ShayariNotesScreen(),
-      const ExpenseTrackerScreen(),
-      const SearchScreen(),
-      const SettingsScreen(),
-    ];
-  }
 
   void _onTabChanged(int index) {
-    // Refresh timeline when switching to it
-    if (index == 0) {
-      final timelineState = _timelineKey.currentState;
-      if (timelineState != null) {
-        // Call the refresh method via dynamic to avoid type issues
-        (timelineState as dynamic).refresh();
-      }
-    }
     setState(() {
       _currentIndex = index;
     });
   }
 
+  // Build the current screen - rebuilds on every tab switch
+  Widget _buildCurrentScreen() {
+    switch (_currentIndex) {
+      case 0:
+        return const TimelineScreen();
+      case 1:
+        return const FoodLoggerScreen();
+      case 2:
+        return const ShayariNotesScreen();
+      case 3:
+        return const ExpenseTrackerScreen();
+      case 4:
+        return const SearchScreen();
+      case 5:
+        return const SettingsScreen();
+      default:
+        return const TimelineScreen();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
+      body: _buildCurrentScreen(),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: _onTabChanged,

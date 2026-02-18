@@ -13,15 +13,10 @@ String get buildVersion {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Pass build version to the app
   debugPrint('JournalX Build: $buildVersion');
 
-  // Request notification permission on Android 13+
-  if (await _requestNotificationPermission()) {
-    debugPrint('Notification permission granted');
-  } else {
-    debugPrint('Notification permission denied');
-  }
+  // Request notification and SMS permissions
+  await _requestPermissions();
 
   // Initialize database
   await DatabaseHelper.instance.database;
@@ -33,32 +28,18 @@ void main() async {
   runApp(const ProviderScope(child: JournalXApp()));
 }
 
-Future<bool> _requestNotificationPermission() async {
+Future<void> _requestPermissions() async {
   // Check if we're on Android
   if (!const bool.fromEnvironment('dart.library.android')) {
-    return true;
+    return;
   }
 
   try {
-    // Method channel to request notification permission
-    const platform = MethodChannel('android/NOTIFICATION_PERMISSION');
-    final result = await platform.invokeMethod<bool>('requestPermission');
-    return result ?? false;
+    // Request notification and SMS permissions
+    const platform = MethodChannel('android/PERMISSIONS');
+    await platform.invokeMethod('requestPermission'); // Notification
+    await platform.invokeMethod('requestSmsPermission'); // SMS
   } catch (e) {
-    // Fallback: try using permission_handler approach
-    try {
-      final androidPlugin = await _getNotificationChannel();
-      return androidPlugin;
-    } catch (e) {
-      debugPrint('Error requesting notification permission: $e');
-      return false;
-    }
+    debugPrint('Error requesting permissions: $e');
   }
-}
-
-Future<bool> _getNotificationChannel() async {
-  // For Android 13+, we need to check and request notification channel
-  // This is a simplified approach - the service will still work
-  // as it uses its own notification channel
-  return true;
 }

@@ -15,7 +15,8 @@ class FoodLoggerScreen extends StatefulWidget {
   State<FoodLoggerScreen> createState() => _FoodLoggerScreenState();
 }
 
-class _FoodLoggerScreenState extends State<FoodLoggerScreen> {
+class _FoodLoggerScreenState extends State<FoodLoggerScreen>
+    with WidgetsBindingObserver {
   final ImagePicker _picker = ImagePicker();
   List<Meal> _meals = [];
   bool _isLoading = true;
@@ -23,6 +24,26 @@ class _FoodLoggerScreenState extends State<FoodLoggerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadMeals();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadMeals();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     _loadMeals();
   }
 
@@ -186,8 +207,8 @@ class _FoodLoggerScreenState extends State<FoodLoggerScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _meals.isEmpty
-          ? _buildEmptyState()
-          : _buildMealsList(),
+              ? _buildEmptyState()
+              : _buildMealsList(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _addMeal,
         icon: const Icon(Icons.add_a_photo),

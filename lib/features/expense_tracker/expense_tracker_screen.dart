@@ -17,7 +17,8 @@ class ExpenseTrackerScreen extends StatefulWidget {
   State<ExpenseTrackerScreen> createState() => _ExpenseTrackerScreenState();
 }
 
-class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen> {
+class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen>
+    with WidgetsBindingObserver {
   List<Expense> _expenses = [];
   List<Category> _categories = [];
   List<PaymentMode> _paymentModes = [];
@@ -29,13 +30,28 @@ class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadData();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _loadData();
   }
 
   Future<void> _loadData() async {
