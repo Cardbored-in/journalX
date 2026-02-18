@@ -284,34 +284,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
 
+      // First, fetch existing expenses to check for duplicates using raw SMS hash
+      final existingExpenses =
+          await DatabaseHelper.instance.queryAll('expenses');
+      final existingSmsHashes = <String>{};
+      for (final exp in existingExpenses) {
+        // Use raw SMS for duplicate detection - most reliable
+        final rawSms = exp['rawSms'] as String?;
+        if (rawSms != null && rawSms.isNotEmpty) {
+          existingSmsHashes.add(rawSms.hashCode.toString());
+        }
+      }
+
       const platform = MethodChannel('android/SMS');
       final List<dynamic> smsResult =
           await platform.invokeMethod('readOldSms', {'days': days});
 
-      // Track seen transactions to avoid duplicates
-      final seenTransactions = <String>{};
+      // Track seen transactions to avoid duplicates in current import
+      final seenSmsHashes = <String>{};
 
       // Parse and filter expenses, then save to database
       int savedCount = 0;
+      int skippedCount = 0;
       for (final sms in smsResult) {
         final body = sms['body'] as String;
         final address = sms['address'] as String;
         final timestamp = sms['date'] as int;
 
         if (_isExpenseMessage(body)) {
+          // Use raw SMS hash as unique key for duplicate detection
+          final smsHash = body.hashCode.toString();
+
+          // Skip if already exists in database OR in current batch
+          if (existingSmsHashes.contains(smsHash) ||
+              seenSmsHashes.contains(smsHash)) {
+            skippedCount++;
+            continue;
+          }
+          seenSmsHashes.add(smsHash);
+          existingSmsHashes.add(smsHash);
+
           // Parse amount from message
           final amount = _parseAmount(body);
           if (amount != null && amount > 0) {
             // Parse receiver
             final receiver = _parseReceiver(body);
-
-            // Skip duplicates based on amount + timestamp + rough description
-            final transactionKey =
-                '${amount}_${timestamp ~/ 60000}_${(receiver ?? "").substring(0, (receiver ?? "").length.clamp(0, 5))}';
-            if (seenTransactions.contains(transactionKey)) {
-              continue;
-            }
-            seenTransactions.add(transactionKey);
 
             final description = receiver ?? 'Imported from SMS';
 
@@ -345,6 +362,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
 
       String message = 'Imported $savedCount expenses from $days days';
+      if (skippedCount > 0) {
+        message += ' ($skippedCount duplicates skipped)';
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

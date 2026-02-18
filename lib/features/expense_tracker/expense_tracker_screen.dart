@@ -25,6 +25,9 @@ class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen>
   AppSettings? _settings;
   bool _isLoading = true;
   String _selectedCategory = 'All';
+  String? _selectedPaymentModeFilter;
+  String _selectedTimePeriod =
+      'All'; // 'All', '15days', '30days', 'ThisMonth', 'ThisYear'
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -86,11 +89,48 @@ class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen>
   List<Expense> get _filteredExpenses {
     var filtered = _expenses;
 
+    // Filter by time period
+    if (_selectedTimePeriod != 'All') {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+
+      DateTime startDate;
+      switch (_selectedTimePeriod) {
+        case '15days':
+          startDate = today.subtract(const Duration(days: 15));
+        case '30days':
+          startDate = today.subtract(const Duration(days: 30));
+        case 'ThisMonth':
+          startDate = DateTime(now.year, now.month, 1);
+        case 'ThisYear':
+          startDate = DateTime(now.year, 1, 1);
+        default:
+          startDate = today;
+      }
+
+      filtered = filtered
+          .where((e) =>
+              e.createdAt.isAfter(startDate) ||
+              (e.createdAt.year == startDate.year &&
+                  e.createdAt.month == startDate.month &&
+                  e.createdAt.day == startDate.day))
+          .toList();
+    }
+
+    // Filter by category
     if (_selectedCategory != 'All') {
       filtered =
           filtered.where((e) => e.category == _selectedCategory).toList();
     }
 
+    // Filter by payment mode
+    if (_selectedPaymentModeFilter != null) {
+      filtered = filtered
+          .where((e) => e.paymentModeId == _selectedPaymentModeFilter)
+          .toList();
+    }
+
+    // Filter by search text (searches in description)
     if (_searchController.text.isNotEmpty) {
       final query = _searchController.text.toLowerCase();
       filtered = filtered
@@ -99,6 +139,15 @@ class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen>
     }
 
     return filtered;
+  }
+
+  void _clearAllFilters() {
+    setState(() {
+      _selectedCategory = 'All';
+      _selectedPaymentModeFilter = null;
+      _selectedTimePeriod = 'All';
+      _searchController.clear();
+    });
   }
 
   double get _totalExpenses {
@@ -505,7 +554,7 @@ class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen>
         children: [
           _buildHeader(),
           _buildCategoryFilter(),
-          _buildSearchBar(),
+          _buildFilterBar(),
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -604,28 +653,151 @@ class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen>
     );
   }
 
-  Widget _buildSearchBar() {
+  Widget _buildFilterBar() {
+    // Check if any filter is active
+    final hasActiveFilters = _selectedCategory != 'All' ||
+        _selectedPaymentModeFilter != null ||
+        _selectedTimePeriod != 'All' ||
+        _searchController.text.isNotEmpty;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: TextField(
-        controller: _searchController,
-        decoration: InputDecoration(
-          hintText: 'Search expenses...',
-          prefixIcon: const Icon(Icons.search),
-          suffixIcon: _searchController.text.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.clear),
-                  onPressed: () {
-                    _searchController.clear();
-                    setState(() {});
-                  },
-                )
-              : null,
-          isDense: true,
-          contentPadding:
-              const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-        ),
-        onChanged: (value) => setState(() {}),
+      child: Column(
+        children: [
+          // First row: Time period filter and clear button
+          Row(
+            children: [
+              // Time period filter dropdown
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                      color: AppTheme.onSurfaceColor.withOpacity(0.3)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedTimePeriod,
+                    hint: const Text('Time', style: TextStyle(fontSize: 14)),
+                    isDense: true,
+                    items: const [
+                      DropdownMenuItem<String>(
+                        value: 'All',
+                        child: Text('All Time', style: TextStyle(fontSize: 14)),
+                      ),
+                      DropdownMenuItem<String>(
+                        value: '15days',
+                        child: Text('Last 15 Days',
+                            style: TextStyle(fontSize: 14)),
+                      ),
+                      DropdownMenuItem<String>(
+                        value: '30days',
+                        child: Text('Last 30 Days',
+                            style: TextStyle(fontSize: 14)),
+                      ),
+                      DropdownMenuItem<String>(
+                        value: 'ThisMonth',
+                        child:
+                            Text('This Month', style: TextStyle(fontSize: 14)),
+                      ),
+                      DropdownMenuItem<String>(
+                        value: 'ThisYear',
+                        child:
+                            Text('This Year', style: TextStyle(fontSize: 14)),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedTimePeriod = value ?? 'All';
+                      });
+                    },
+                  ),
+                ),
+              ),
+              const Spacer(),
+              // Clear filters button
+              if (hasActiveFilters)
+                TextButton.icon(
+                  onPressed: _clearAllFilters,
+                  icon: const Icon(Icons.clear_all, size: 18),
+                  label: const Text('Clear', style: TextStyle(fontSize: 14)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Second row: Search and payment mode
+          Row(
+            children: [
+              // Search bar
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Search...',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon: _searchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {});
+                            },
+                          )
+                        : null,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        vertical: 10, horizontal: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  onChanged: (value) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Payment mode filter dropdown
+              if (_paymentModes.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                        color: AppTheme.onSurfaceColor.withOpacity(0.3)),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String?>(
+                      value: _selectedPaymentModeFilter,
+                      hint:
+                          const Text('Payment', style: TextStyle(fontSize: 14)),
+                      isDense: true,
+                      items: [
+                        const DropdownMenuItem<String?>(
+                          value: null,
+                          child: Text('All Payments',
+                              style: TextStyle(fontSize: 14)),
+                        ),
+                        ..._paymentModes
+                            .map((mode) => DropdownMenuItem<String?>(
+                                  value: mode.id,
+                                  child: Text(
+                                    mode.displayName.length > 20
+                                        ? '${mode.displayName.substring(0, 20)}...'
+                                        : mode.displayName,
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
+                                )),
+                      ],
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedPaymentModeFilter = value;
+                        });
+                      },
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }
