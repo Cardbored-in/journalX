@@ -3,6 +3,7 @@ package com.journalx.app
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.provider.Telephony
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -18,6 +19,10 @@ class SmsReceiver : BroadcastReceiver() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_LOG_EXPENSE = "com.journalx.app.LOG_EXPENSE"
         private const val TAG = "SmsReceiver"
+        const val PREFS_NAME = "journalx_prefs"
+        const val KEY_PENDING_AMOUNT = "pending_amount"
+        const val KEY_PENDING_RECEIVER = "pending_receiver"
+        const val KEY_PENDING_SOURCE = "pending_source"
     }
     
     override fun onReceive(context: Context, intent: Intent) {
@@ -40,15 +45,11 @@ class SmsReceiver : BroadcastReceiver() {
         
         Log.d(TAG, "Detected expense: ${expenseData.amount} to ${expenseData.receiver}")
         
-        // Store expense data for when user opens app
-        MainActivity.pendingExpenseData = mapOf(
-            "amount" to expenseData.amount,
-            "receiver" to (expenseData.receiver ?: "Unknown"),
-            "source" to expenseData.source
-        )
+        // Auto-save expense to database
+        saveExpenseToDatabase(context, expenseData)
         
-        // Show notification
-        showExpenseNotification(context, expenseData)
+        // Show simple notification
+        showExpenseSavedNotification(context, expenseData)
     }
     
     data class ExpenseData(
@@ -174,7 +175,53 @@ class SmsReceiver : BroadcastReceiver() {
         }
     }
     
-    private fun showExpenseNotification(context: Context, expenseData: ExpenseData) {
+    private fun saveExpenseToDatabase(context: Context, expenseData: ExpenseData) {
+        try {
+            val db = context.openOrCreateDatabase("journalx.db", Context.MODE_PRIVATE, null)
+            
+            // Create table with correct schema matching Flutter's sqflite
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS expenses (
+                    id TEXT PRIMARY KEY,
+                    amount REAL NOT NULL,
+                    description TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    paymentModeId TEXT,
+                    createdAt TEXT NOT NULL,
+                    rawSms TEXT
+                )
+            """.trimIndent())
+            
+            // Generate UUID for id
+            val id = java.util.UUID.randomUUID().toString()
+            
+            // Format timestamp as ISO 8601 string (matching Flutter's DateFormat)
+            val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+            
+            // Insert expense using ContentValues
+            val receiver = expenseData.receiver ?: "Unknown"
+            val source = expenseData.source
+            
+            val values = android.content.ContentValues().apply {
+                put("id", id)
+                put("amount", expenseData.amount)
+                put("description", "Sent to $receiver")
+                put("category", "Transfer")
+                put("paymentModeId", source)
+                put("createdAt", timestamp)
+                put("rawSms", "Auto-detected from SMS")
+            }
+            
+            db.insert("expenses", null, values)
+            
+            Log.d(TAG, "Expense saved: ₹${expenseData.amount} to $receiver")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving expense: ${e.message}")
+        }
+    }
+    
+    private fun showExpenseSavedNotification(context: Context, expenseData: ExpenseData) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         
         // Create notification channel for Android 8+
@@ -182,7 +229,7 @@ class SmsReceiver : BroadcastReceiver() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Expense Detection",
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "Notifications for detected expenses from SMS"
             }
@@ -193,12 +240,6 @@ class SmsReceiver : BroadcastReceiver() {
         val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
         launchIntent?.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         
-        // Add expense data as extras
-        launchIntent?.putExtra("amount", expenseData.amount)
-        launchIntent?.putExtra("receiver", expenseData.receiver)
-        launchIntent?.putExtra("source", expenseData.source)
-        launchIntent?.putExtra("auto_open_expense", true)
-        
         val pendingIntent = PendingIntent.getActivity(
             context,
             0,
@@ -208,22 +249,17 @@ class SmsReceiver : BroadcastReceiver() {
         
         // Build the notification
         val amountStr = "₹${expenseData.amount.toInt()}"
-        val receiverText = expenseData.receiver?.let { " at $it" } ?: ""
+        val receiverText = expenseData.receiver?.let { " to $it" } ?: ""
         
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_manage)
-            .setContentTitle("💰 Detected $amountStr expense")
-            .setContentText("${expenseData.source}$receiverText")
+            .setSmallIcon(android.R.drawable.ic_menu_save)
+            .setContentTitle("✅ Expense Saved!")
+            .setContentText("$amountStr$receiverText from ${expenseData.source}")
             .setStyle(NotificationCompat.BigTextStyle()
-                .bigText("Detected $amountStr expense${receiverText} from ${expenseData.source}\n\nTap to add description and save to your expenses."))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .bigText("$amountStr$receiverText from ${expenseData.source}\n\nAuto-saved to your expenses."))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .addAction(
-                android.R.drawable.ic_menu_save,
-                "Save Expense",
-                pendingIntent
-            )
             .build()
         
         notificationManager.notify(NOTIFICATION_ID, notification)

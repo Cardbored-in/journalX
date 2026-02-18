@@ -2,6 +2,8 @@ package com.journalx.app
 
 import android.Manifest
 import android.content.ContentResolver
+import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
@@ -25,9 +27,27 @@ class MainActivity : FlutterActivity() {
     private val NOTIFICATION_PERMISSION_CODE = 100
     private val SMS_PERMISSION_CODE = 101
     
-    // Store pending expense data
+    // SharedPreferences keys (same as SmsReceiver)
     companion object {
-        var pendingExpenseData: Map<String, Any>? = null
+        const val PREFS_NAME = "journalx_prefs"
+        const val KEY_PENDING_AMOUNT = "pending_amount"
+        const val KEY_PENDING_RECEIVER = "pending_receiver"
+        const val KEY_PENDING_SOURCE = "pending_source"
+        
+        fun getPendingExpense(context: Context): Map<String, Any>? {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val amount = prefs.getFloat(KEY_PENDING_AMOUNT, -1f)
+            if (amount < 0) return null
+            
+            return mapOf(
+                "amount" to amount.toDouble(),
+                "receiver" to (prefs.getString(KEY_PENDING_RECEIVER, "") ?: ""),
+                "source" to (prefs.getString(KEY_PENDING_SOURCE, "") ?: "")
+            ).also {
+                // Clear after reading
+                prefs.edit().remove(KEY_PENDING_AMOUNT).remove(KEY_PENDING_RECEIVER).remove(KEY_PENDING_SOURCE).apply()
+            }
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -79,8 +99,8 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, INTENT_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getPendingIntent" -> {
-                    val data = pendingExpenseData
-                    pendingExpenseData = null  // Clear after reading
+                    // Use SharedPreferences for persistent storage
+                    val data = getPendingExpense(this)
                     result.success(data)
                 }
                 else -> {

@@ -42,15 +42,13 @@ class _JournalXAppState extends ConsumerState<JournalXApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && !_hasCheckedIntent) {
+    // Check every time app resumes
+    if (state == AppLifecycleState.resumed) {
       _checkForPendingIntent();
     }
   }
 
   Future<void> _checkForPendingIntent() async {
-    if (_hasCheckedIntent) return;
-    _hasCheckedIntent = true;
-
     try {
       final result = await _platform
           .invokeMethod<Map<dynamic, dynamic>>('getPendingIntent');
@@ -62,18 +60,24 @@ class _JournalXAppState extends ConsumerState<JournalXApp>
         if (data.isNotEmpty) {
           debugPrint('Showing expense dialog for: $data');
 
-          // Show dialog immediately
-          if (mounted && context.mounted) {
-            showDialog(
-              context: context,
-              builder: (context) => _PendingExpenseDialog(data: data),
-            );
-          }
+          // Use postFrameCallback to ensure MaterialApp is ready
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && context.mounted) {
+              // Use Navigator.of to get the context
+              final navigator = Navigator.of(context);
+              if (navigator.canPop() == false) {
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (dialogContext) => _PendingExpenseDialog(data: data),
+                );
+              }
+            }
+          });
         }
       }
     } catch (e) {
       debugPrint('Error checking pending intent: $e');
-      // Ignore - method might not be implemented
     }
   }
 
