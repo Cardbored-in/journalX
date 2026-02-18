@@ -61,7 +61,12 @@ class PaymentMode {
   }
 
   String get displayName {
+    // If name already contains the last 4 digits (from SMS auto-detection), just return name
     if (lastFourDigits != null && lastFourDigits!.isNotEmpty) {
+      // Check if name already has the card digits (avoid duplication) - case insensitive
+      if (name.toLowerCase().contains(lastFourDigits!.toLowerCase())) {
+        return name;
+      }
       return '$name ••••$lastFourDigits';
     }
     return name;

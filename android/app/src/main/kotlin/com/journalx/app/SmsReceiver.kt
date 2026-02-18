@@ -56,6 +56,7 @@ class SmsReceiver : BroadcastReceiver() {
         val amount: Double,
         val receiver: String?,
         val source: String,
+        val cardLast4: String?,
         val timestamp: Long
     )
     
@@ -102,12 +103,38 @@ class SmsReceiver : BroadcastReceiver() {
         // Identify source bank
         val source = identifySource(sender, message)
         
+        // Extract card last 4 digits
+        val cardLast4 = extractCardLast4(message)
+        
         return ExpenseData(
             amount = amount,
             receiver = receiver,
             source = source,
+            cardLast4 = cardLast4,
             timestamp = System.currentTimeMillis()
         )
+    }
+    
+    // Extract card last 4 digits from message
+    private fun extractCardLast4(message: String): String? {
+        val msg = message.uppercase()
+        
+        // Patterns to find card last 4 digits
+        val cardPatterns = listOf(
+            "CARD\\s*(?:ENDING\\s*)?(\\d{4})".toRegex(RegexOption.IGNORE_CASE),
+            "ENDING\\s*(\\d{4})".toRegex(RegexOption.IGNORE_CASE),
+            "\\*(\\d{4})\\b".toRegex(),
+            "XX(\\d{4})".toRegex(RegexOption.IGNORE_CASE)
+        )
+        
+        for (pattern in cardPatterns) {
+            val match = pattern.find(msg)
+            if (match != null) {
+                return match.groupValues[1]
+            }
+        }
+        
+        return null
     }
     
     private fun extractReceiver(message: String, sender: String): String? {
@@ -179,7 +206,7 @@ class SmsReceiver : BroadcastReceiver() {
         try {
             val db = context.openOrCreateDatabase("journalx.db", Context.MODE_PRIVATE, null)
             
-            // Create table with correct schema matching Flutter's sqflite
+            // Create expenses table if not exists
             db.execSQL("""
                 CREATE TABLE IF NOT EXISTS expenses (
                     id TEXT PRIMARY KEY,
@@ -192,29 +219,86 @@ class SmsReceiver : BroadcastReceiver() {
                 )
             """.trimIndent())
             
-            // Generate UUID for id
-            val id = java.util.UUID.randomUUID().toString()
+            // Create payment_modes table if not exists (for auto-adding new payment modes)
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS payment_modes (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    lastFourDigits TEXT,
+                    createdAt TEXT NOT NULL
+                )
+            """.trimIndent())
             
-            // Format timestamp as ISO 8601 string (matching Flutter's DateFormat)
+            // Generate combined payment mode ID and display name
+            val bankName = expenseData.source
+            val cardLast4 = expenseData.cardLast4
+            
+            // Build payment mode display: "HDFC Bank •••• 1234" or just "HDFC Bank" or just "•••• 1234"
+            val paymentModeDisplay = when {
+                bankName != "Bank/Unknown" && cardLast4 != null -> "$bankName •••• $cardLast4"
+                bankName != "Bank/Unknown" -> bankName
+                cardLast4 != null -> "•••• $cardLast4"
+                else -> "Unknown"
+            }
+            
+            // Check if this payment mode already exists, if not create it
+            val checkQuery = "SELECT id FROM payment_modes WHERE name = ?"
+            val cursor = db.rawQuery(checkQuery, arrayOf(paymentModeDisplay))
+            val paymentModeId: String
+            
+            if (cursor.count == 0) {
+                // Create new payment mode
+                paymentModeId = java.util.UUID.randomUUID().toString()
+                val createdAt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+                
+                // Determine type
+                val type = when {
+                    cardLast4 != null -> "Card"
+                    bankName.contains("Bank", ignoreCase = true) -> "Bank"
+                    bankName.contains("Paytm", ignoreCase = true) -> "UPI"
+                    bankName.contains("PhonePe", ignoreCase = true) -> "UPI"
+                    bankName.contains("Google Pay", ignoreCase = true) || bankName.contains("GPay", ignoreCase = true) -> "UPI"
+                    else -> "Other"
+                }
+                
+                val pmValues = android.content.ContentValues().apply {
+                    put("id", paymentModeId)
+                    put("name", paymentModeDisplay)
+                    put("type", type)
+                    put("lastFourDigits", cardLast4)
+                    put("createdAt", createdAt)
+                }
+                db.insert("payment_modes", null, pmValues)
+                Log.d(TAG, "Created new payment mode: $paymentModeDisplay")
+            } else {
+                cursor.moveToFirst()
+                paymentModeId = cursor.getString(0)
+            }
+            cursor.close()
+            
+            // Generate UUID for expense
+            val expenseId = java.util.UUID.randomUUID().toString()
+            
+            // Format timestamp as ISO 8601 string
             val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
             
-            // Insert expense using ContentValues
+            // Insert expense
             val receiver = expenseData.receiver ?: "Unknown"
-            val source = expenseData.source
             
             val values = android.content.ContentValues().apply {
-                put("id", id)
+                put("id", expenseId)
                 put("amount", expenseData.amount)
                 put("description", "Sent to $receiver")
                 put("category", "Transfer")
-                put("paymentModeId", source)
+                put("paymentModeId", paymentModeId)
                 put("createdAt", timestamp)
                 put("rawSms", "Auto-detected from SMS")
             }
             
             db.insert("expenses", null, values)
             
-            Log.d(TAG, "Expense saved: ₹${expenseData.amount} to $receiver")
+            Log.d(TAG, "Expense saved: ₹${expenseData.amount} to $receiver with payment mode: $paymentModeDisplay")
             
         } catch (e: Exception) {
             Log.e(TAG, "Error saving expense: ${e.message}")

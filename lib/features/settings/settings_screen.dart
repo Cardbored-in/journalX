@@ -318,8 +318,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // Detect category from merchant
             final category = _detectCategory(body, description);
 
-            // Detect payment mode (card last 4 digits)
+            // Detect bank name and card last 4 digits
+            final bankName = _detectBankName(address, body);
             final cardLast4 = _detectCardLast4(body);
+
+            // Get or create payment mode
+            final paymentModeId =
+                await _getOrCreatePaymentMode(bankName, cardLast4);
 
             // Create expense with raw SMS for debugging
             final expense = Expense(
@@ -327,7 +332,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               amount: amount,
               description: description,
               category: category,
-              paymentModeId: cardLast4,
+              paymentModeId: paymentModeId,
               createdAt: DateTime.fromMillisecondsSinceEpoch(timestamp),
               rawSms: body, // Save raw SMS for debugging
             );
@@ -356,6 +361,106 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     }
+  }
+
+  // Detect bank name from address/message
+  String _detectBankName(String address, String message) {
+    final addrUpper = address.toUpperCase();
+    final msgUpper = message.toUpperCase();
+
+    if (addrUpper.contains('HDFC') || msgUpper.contains('HDFC'))
+      return 'HDFC Bank';
+    if (addrUpper.contains('SBI') ||
+        msgUpper.contains('STATE BANK') ||
+        msgUpper.contains('SBI')) return 'SBI';
+    if (addrUpper.contains('ICICI') || msgUpper.contains('ICICI'))
+      return 'ICICI Bank';
+    if (addrUpper.contains('AXIS') || msgUpper.contains('AXIS'))
+      return 'Axis Bank';
+    if (addrUpper.contains('KOTAK') || msgUpper.contains('KOTAK'))
+      return 'Kotak Bank';
+    if (addrUpper.contains('YES') || msgUpper.contains('YES BANK'))
+      return 'Yes Bank';
+    if (addrUpper.contains('INDUSIND') || msgUpper.contains('INDUSIND'))
+      return 'IndusInd Bank';
+    if (addrUpper.contains('PNB') || msgUpper.contains('PUNJAB NATIONAL'))
+      return 'PNB';
+    if (addrUpper.contains('CANARA') || msgUpper.contains('CANARA'))
+      return 'Canara Bank';
+    if (addrUpper.contains('UNION') || msgUpper.contains('UNION BANK'))
+      return 'Union Bank';
+    if (addrUpper.contains('BANK OF BARODA') || msgUpper.contains('BOB'))
+      return 'Bank of Baroda';
+    if (addrUpper.contains('IDBI') || msgUpper.contains('IDBI'))
+      return 'IDBI Bank';
+    if (addrUpper.contains('CITI') || msgUpper.contains('CITI'))
+      return 'Citibank';
+    if (addrUpper.contains('AMEX') || msgUpper.contains('AMERICAN EXPRESS'))
+      return 'American Express';
+    if (addrUpper.contains('PAYTM') || msgUpper.contains('PAYTM'))
+      return 'Paytm';
+    if (addrUpper.contains('PHONEPE') || msgUpper.contains('PHONEPE'))
+      return 'PhonePe';
+    if (addrUpper.contains('GPAY') ||
+        msgUpper.contains('GPAY') ||
+        msgUpper.contains('GOOGLE PAY')) return 'Google Pay';
+    if (addrUpper.contains('AMAZON') || msgUpper.contains('AMAZON'))
+      return 'Amazon Pay';
+
+    return 'Bank/Unknown';
+  }
+
+  // Get or create payment mode - returns the payment mode ID
+  Future<String?> _getOrCreatePaymentMode(
+      String bankName, String? cardLast4) async {
+    // Build payment mode display: "HDFC Bank •••• 1234" or just "HDFC Bank" or just "•••• 1234"
+    final String paymentModeDisplay;
+    if (bankName != 'Bank/Unknown' && cardLast4 != null) {
+      paymentModeDisplay = '$bankName •••• $cardLast4';
+    } else if (bankName != 'Bank/Unknown') {
+      paymentModeDisplay = bankName;
+    } else if (cardLast4 != null) {
+      paymentModeDisplay = '•••• $cardLast4';
+    } else {
+      paymentModeDisplay = 'Unknown';
+    }
+
+    // Check if payment mode exists
+    final db = await DatabaseHelper.instance.database;
+    final existing = await db.query(
+      'payment_modes',
+      where: 'name = ?',
+      whereArgs: [paymentModeDisplay],
+    );
+
+    if (existing.isNotEmpty) {
+      return existing.first['id'] as String;
+    }
+
+    // Create new payment mode
+    final id = const Uuid().v4();
+    final type = _getPaymentModeType(bankName, cardLast4);
+
+    await db.insert('payment_modes', {
+      'id': id,
+      'name': paymentModeDisplay,
+      'type': type,
+      'lastFourDigits': cardLast4,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+
+    return id;
+  }
+
+  String _getPaymentModeType(String bankName, String? cardLast4) {
+    if (cardLast4 != null) return 'Card';
+    final lowerName = bankName.toLowerCase();
+    if (lowerName.contains('bank')) return 'Bank';
+    if (lowerName.contains('paytm')) return 'UPI';
+    if (lowerName.contains('phonepe')) return 'UPI';
+    if (lowerName.contains('google pay') || lowerName.contains('gpay'))
+      return 'UPI';
+    return 'Other';
   }
 
   bool _isExpenseMessage(String message) {

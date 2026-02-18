@@ -118,12 +118,16 @@ class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen>
     return category.icon;
   }
 
-  PaymentMode? _getPaymentModeById(String? id) {
+  // Get payment mode - either from configured modes or display raw value (like bank name from SMS)
+  String? _getPaymentModeDisplay(String? id) {
     if (id == null) return null;
+    // First try to find in configured payment modes
     try {
-      return _paymentModes.firstWhere((m) => m.id == id);
+      final mode = _paymentModes.firstWhere((m) => m.id == id);
+      return mode.displayName;
     } catch (e) {
-      return null;
+      // If not found, return the raw value (e.g., bank name from SMS detection)
+      return id;
     }
   }
 
@@ -670,7 +674,7 @@ class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen>
   Widget _buildExpenseCard(Expense expense) {
     final dateFormat = DateFormat('MMM d, yyyy');
     final currencyFormat = NumberFormat.currency(symbol: _currencySymbol);
-    final paymentMode = _getPaymentModeById(expense.paymentModeId);
+    final paymentModeDisplay = _getPaymentModeDisplay(expense.paymentModeId);
 
     return Dismissible(
       key: Key(expense.id),
@@ -758,8 +762,8 @@ class _ExpenseTrackerScreenState extends State<ExpenseTrackerScreen>
                     ],
                     const SizedBox(height: 4),
                     Text(
-                      paymentMode != null
-                          ? '${paymentMode.displayName} • ${dateFormat.format(expense.createdAt)}'
+                      paymentModeDisplay != null
+                          ? '$paymentModeDisplay • ${dateFormat.format(expense.createdAt)}'
                           : dateFormat.format(expense.createdAt),
                       style: TextStyle(
                         color: AppTheme.onSurfaceColor.withOpacity(0.5),
